@@ -1,16 +1,31 @@
-# Build Geth in a stock Go builder container
-FROM golang:1.10-alpine as builder
+# Platinumwrist/go-ethereum  Mainnet Full Node
+# Multi-stage build: compile from source, deploy minimal alpine runtime
 
-RUN apk add --no-cache make gcc musl-dev linux-headers
+FROM golang:1.21-alpine AS builder
 
-ADD . /go-ethereum
-RUN cd /go-ethereum && make geth
+RUN apk add --no-cache make gcc musl-dev linux-headers git ca-certificates
 
-# Pull Geth into a second stage deploy alpine container
-FROM alpine:latest
+WORKDIR /build
+COPY . .
+RUN make geth
 
-RUN apk add --no-cache ca-certificates
-COPY --from=builder /go-ethereum/build/bin/geth /usr/local/bin/
+FROM alpine:3.19
 
-EXPOSE 8545 8546 30303 30303/udp
-ENTRYPOINT ["geth"]
+RUN apk add --no-cache ca-certificates tzdata curl jq bash
+RUN addgroup -S geth && adduser -S -G geth geth
+
+COPY --from=builder /build/build/bin/geth /usr/local/bin/geth
+
+RUN mkdir -p /data/geth && chown -R geth:geth /data
+VOLUME /data/geth
+
+USER geth
+
+EXPOSE 8545 8546 8551 30303 30303/udp 6060
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -sf http://localhost:8545 -X POST \
+            -H "Content-Type: application/json" \
+                    -d '{"jsonrpc":"2.0","method":"eth_syncing","params":[],"id":1}' || exit 1
+
+                    ENTRYPOINT ["geth"]
