@@ -1,0 +1,136 @@
+version: "3.9"
+
+services:
+  # Execution Layer: Geth
+  geth:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: geth-mainnet
+    restart: unless-stopped
+    stop_grace_period: 3m
+    env_file: .env
+    command:
+      - --mainnet
+      - --syncmode=snap
+      - --gcmode=full
+      - --datadir=/data/geth
+      - --http
+      - --http.addr=0.0.0.0
+      - --http.port=8545
+      - --http.api=eth,net,web3,txpool,debug
+      - --http.vhosts=*
+      - --http.corsdomain=*
+      - --ws
+      - --ws.addr=0.0.0.0
+      - --ws.port=8546
+      - --ws.api=eth,net,web3,txpool
+      - --ws.origins=*
+      - --authrpc.addr=0.0.0.0
+      - --authrpc.port=8551
+      - --authrpc.vhosts=*
+      - --authrpc.jwtsecret=/data/jwt/jwt.hex
+      - --metrics
+      - --metrics.addr=0.0.0.0
+      - --metrics.port=6060
+      - --maxpeers=50
+      - --cache=4096
+      - --db.engine=pebble
+    ports:
+      - "${GETH_P2P_PORT:-30303}:30303"
+      - "${GETH_P2P_PORT:-30303}:30303/udp"
+      - "${GETH_RPC_PORT:-8545}:8545"
+      - "${GETH_WS_PORT:-8546}:8546"
+      - "8551:8551"
+      - "${GETH_METRICS_PORT:-6060}:6060"
+    volumes:
+      - geth-data:/data/geth
+      - jwt-secret:/data/jwt:ro
+    networks:
+      - eth-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          memory: 16G
+
+  # Consensus Layer: Lighthouse Beacon Node
+  lighthouse:
+    image: sigp/lighthouse:latest
+    container_name: lighthouse-mainnet
+    restart: unless-stopped
+    stop_grace_period: 3m
+    command:
+      - lighthouse
+      - bn
+      - --network=mainnet
+      - --datadir=/data/lighthouse
+      - --execution-endpoint=http://geth:8551
+      - --execution-jwt=/data/jwt/jwt.hex
+      - --checkpoint-sync-url=https://beaconstate.ethstaker.cc
+      - --http
+      - --http-address=0.0.0.0
+      - --http-port=5052
+      - --metrics
+      - --metrics-address=0.0.0.0
+      - --metrics-port=5054
+      - --port=9000
+      - --discovery-port=9000
+      - --target-peers=80
+    ports:
+      - "${LIGHTHOUSE_P2P_PORT:-9000}:9000"
+      - "${LIGHTHOUSE_P2P_PORT:-9000}:9000/udp"
+      - "${LIGHTHOUSE_API_PORT:-5052}:5052"
+      - "${LIGHTHOUSE_METRICS_PORT:-5054}:5054"
+    volumes:
+      - lighthouse-data:/data/lighthouse
+      - jwt-secret:/data/jwt:ro
+    depends_on:
+      - geth
+    networks:
+      - eth-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+
+  # JWT Secret Init Container
+  jwt-init:
+    image: alpine:3.19
+    container_name: jwt-init
+    restart: "no"
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        if [ ! -f /data/jwt/jwt.hex ]; then
+          apk add --no-cache openssl
+          openssl rand -hex 32 > /data/jwt/jwt.hex
+          chmod 444 /data/jwt/jwt.hex
+          echo "[jwt-init] JWT secret generated."
+        else
+          echo "[jwt-init] JWT secret already exists."
+        fi
+    volumes:
+      - jwt-secret:/data/jwt
+
+volumes:
+  geth-data:
+    driver: local
+  lighthouse-data:
+    driver: local
+  jwt-secret:
+    driver: local
+
+networks:
+  eth-net:
+    driver: bridge
